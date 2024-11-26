@@ -1,21 +1,27 @@
 #!/bin/bash
 
-# Load configuration from the .env file
+# Load configuration from the .env file, skipping comment lines and empty lines
 if [ -f .env ]; then
-    export $(grep -v '^#' .env | xargs)
+    # Skip lines that are comments or empty, and export the variables
+    while IFS= read -r line; do
+        # Ignore lines that are empty or start with #
+        if [[ ! "$line" =~ ^[[:space:]]*(#|$) ]]; then
+            export "$line"
+        fi
+    done < .env
 else
     echo ".env file not found!"
     exit 1
 fi
 
 # Check if required environment variables are set
-if [[ -z "$API_KEY" || -z "$PROJECT_ID" || -z "$INPUT_LANGUAGE" || -z "$TRANSLATE_LANGUAGES" ]]; then
+if [[ -z "$GOOGLE_API_KEY" || -z "$GOOGLE_PROJECT_ID" || -z "$SOURCE_LANGUAGE" || -z "$TARGET_LANGUAGES" ]]; then
     echo "Missing required environment variables. Please check the .env file."
     exit 1
 fi
 
 # Directory containing i18next JSON files (e.g., ./locales/en)
-INPUT_DIR="./locales/$INPUT_LANGUAGE"
+INPUT_DIR="./locales/$SOURCE_LANGUAGE"
 
 # Base directory for translated files
 OUTPUT_DIR="./locales"
@@ -39,10 +45,10 @@ translate_text() {
         -d "{
                 'q': \"$text\",
                 'target': \"$target_lang\",
-                'source': \"$INPUT_LANGUAGE\",
+                'source': \"$SOURCE_LANGUAGE\",
                 'format': 'text'
              }" \
-        "$url?key=$API_KEY")
+        "$url?key=$GOOGLE_API_KEY")
 
     # Extract translated text using jq
     local translated_text=$(echo "$response" | jq -r '.data.translations[0].translatedText')
@@ -50,7 +56,7 @@ translate_text() {
 }
 
 # Loop through target languages
-IFS=',' read -r -a LANGUAGES <<< "$TRANSLATE_LANGUAGES"
+IFS=',' read -r -a LANGUAGES <<< "$TARGET_LANGUAGES"
 
 # Loop through each JSON file in the input directory
 for file in "$INPUT_DIR"/*.json; do
