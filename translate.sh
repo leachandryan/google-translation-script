@@ -1,4 +1,4 @@
-#!/bin/bash  # Use bash instead of sh for better compatibility
+#!/bin/bash
 
 # Tracker file path
 TRACKER_FILE="translation-tracker"
@@ -15,25 +15,6 @@ json_files=$(find . -maxdepth 1 -type f -name "*.json")
 recent_files=""
 
 current_time=$(date +%s)
-
-# Filter files changed since last run
-for file in $json_files; do
-    file_mod_time=$(stat -c %Y "$file")
-    if [ "$file_mod_time" -gt "$last_run" ]; then
-        recent_files="$recent_files $file"
-    fi
-done
-
-# Process recent files
-for file in $recent_files; do
-    # Extract every string value from JSON file
-    values=$(jq -r '.. | select(type == "string")' "$file")
-    
-    # Print file and its values
-    echo "File: $file"
-    echo "$values"
-    echo "---"
-done
 
 # Check if the .env file exists
 if [ ! -f .env ]; then
@@ -52,56 +33,67 @@ echo "Source Language: $SOURCE_LANGUAGE"
 # Split TARGET_LANGUAGES into an array
 IFS=',' read -ra LANGUAGES_ARRAY <<< "$TARGET_LANGUAGES"
 
-# Format target languages 
-formatted_target_languages=$(printf '"%s" ' "${LANGUAGES_ARRAY[@]}")
+# Filter files changed since last run
+for file in $json_files; do
+    file_mod_time=$(stat -c %Y "$file")
+    if [ "$file_mod_time" -gt "$last_run" ]; then
+        recent_files="$recent_files $file"
+    fi
+done
 
-# Echo formatted target languages
-echo "Target Languages: $formatted_target_languages"
+# Process recent files
+for file in $recent_files; do
+    # Extract every string value from JSON file as a JSON array
+    values=$(jq -c '[.. | select(type == "string")]' "$file")
+    
+    # Print file and its values
+    echo "File: $file"
+    echo "Values to translate: $values"
+    echo "---"
 
-####################################################################################################
+    # Prepare API request with entire array
+    API_KEY="$GOOGLE_API_KEY"
+    SOURCE_LANGUAGE="$SOURCE_LANGUAGE"
+    TARGET_LANGUAGE="fr" # Adjust if needed
 
-# Load variables from .env (assuming these are exported or sourced previously)
-API_KEY="$GOOGLE_API_KEY"
-SOURCE_LANGUAGE="$SOURCE_LANGUAGE"
-TARGET_LANGUAGE="fr" # Adjust if needed
-TEXT=$values # Example text to translate
-echo "Text: $values"
-# Construct the API URL
-URL="https://translation.googleapis.com/language/translate/v2?key=${API_KEY}&source=${SOURCE_LANGUAGE}&target=${TARGET_LANGUAGE}&q=$(echo -n "$TEXT" | jq -sRr @uri)"
+    # Construct the API URL
+    # Note: Google Translate API supports multiple queries in a single request
+    URL="https://translation.googleapis.com/language/translate/v2?key=${API_KEY}"
 
-# Make the API request and parse the response
-RESPONSE=$(curl -s "$URL")
+    # Make the API request with the array of strings
+    RESPONSE=$(curl -s -X POST "$URL" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"q\": $values,
+            \"source\": \"$SOURCE_LANGUAGE\",
+            \"target\": \"$TARGET_LANGUAGE\",
+            \"format\": \"text\"
+        }")
 
-# Check if the response is valid JSON
-if ! echo "$RESPONSE" | jq . >/dev/null 2>&1; then
-  echo "Error: Invalid response from API. Please check your request."
-  echo "Response: $RESPONSE"
-  exit 1
-fi
+    # Check if the response is valid JSON
+    if ! echo "$RESPONSE" | jq . >/dev/null 2>&1; then
+        echo "Error: Invalid response from API. Please check your request."
+        echo "Response: $RESPONSE"
+        continue
+    fi
 
-# Extract the translated text from the JSON response
-TRANSLATED_TEXT=$(echo "$RESPONSE" | jq -r '.data.translations[0].translatedText')
+    # Check for API errors
+    error=$(echo "$RESPONSE" | jq -r '.error.message // empty')
+    if [ -n "$error" ]; then
+        echo "Translation API Error: $error"
+        continue
+    fi
 
-# Check for blank or missing translation
-if [[ -z "$TRANSLATED_TEXT" || "$TRANSLATED_TEXT" == "null" ]]; then
-  echo "Error: Translation came back blank or invalid."
-  echo "Response: $RESPONSE"
-  exit 1
-fi
+    # Extract the translated texts from the JSON response
+    TRANSLATED_TEXTS=$(echo "$RESPONSE" | jq -c '.data.translations[].translatedText')
 
-# Print the translated text
-echo "Translated text: $TRANSLATED_TEXT"
+    # Print the translated texts
+    echo "Translated texts:"
+    echo "$TRANSLATED_TEXTS"
 
-# Check for API errors
-error=$(echo "$response" | jq -r '.error.message // empty')
-if [ -n "$error" ]; then
-    echo "Translation API Error: $error"
-    exit 1
-fi
-
-# Extract translated text
-translated_text=$(echo "$response" | jq -r '.translations[0].translatedText')
-
+    # Optional: Create a new JSON file with translations
+    echo "$TRANSLATED_TEXTS" | jq -c '.' > "${file%.json}_translations.json"
+done
 
 # Update tracker file with current time
 echo "$current_time" > "$TRACKER_FILE"
