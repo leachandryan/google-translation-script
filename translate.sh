@@ -26,7 +26,7 @@ fi
 # Load environment variables from .env file
 export $(grep -v '^#' .env | xargs)
 
-# Print out configuration (be cautious with API keys)
+# Print out configuration
 echo "Google Project ID: $GOOGLE_PROJECT_ID"
 echo "Source Language: $SOURCE_LANGUAGE"
 
@@ -43,7 +43,8 @@ done
 
 # Process recent files
 for file in $recent_files; do
-    # Extract string values from JSON file
+    # Extract paths and strings
+    paths=$(jq -r 'path(.. | select(type == "string")) | join("/")' "$file")
     values=$(jq -c '[.. | select(type == "string")]' "$file")
 
     echo "File: $file"
@@ -62,47 +63,36 @@ for file in $recent_files; do
                 \"format\": \"text\"
             }")
 
-        # Validate response
-        if ! echo "$RESPONSE" | jq . >/dev/null 2>&1; then
-            echo "Error: Invalid response from API for $TARGET_LANGUAGE"
-            echo "Response: $RESPONSE"
-            continue
-        fi
-
         # Check for API errors
-        error=$(echo "$RESPONSE" | jq -r '.error.message // empty')
-        if [ -n "$error" ]; then
-            echo "Translation API Error for $TARGET_LANGUAGE: $error"
+        if echo "$RESPONSE" | jq -e '.error' > /dev/null; then
+            echo "Translation API Error for $TARGET_LANGUAGE: $(echo "$RESPONSE" | jq -r '.error.message')"
             continue
         fi
 
-       # Extract translated texts as an array of strings
-        TRANSLATED_TEXTS=$(echo "$RESPONSE" | jq -c '[.data.translations[].translatedText]')
+        # Extract translations
+        translations=$(echo "$RESPONSE" | jq -r '.data.translations[].translatedText')
 
-        # Create language-specific directory if it doesn't exist
+        # Create language-specific directory
         mkdir -p "${TARGET_LANGUAGE}"
-
-        # Set directory permissions to allow reading and executing, but prevent non-privileged deletion
         chmod 755 "${TARGET_LANGUAGE}"
 
-        # Use jq to merge original JSON with translations
-        jq -c --argjson translations "$TRANSLATED_TEXTS" '
-            # Recursively walk through the JSON
-            walk(
-                # If it is a string, try to replace with translation
-                if type == "string" then 
-                    # Find the matching translation (assumes order preservation)
-                    $translations[index(. | tostring)]
-                else 
-                    # If not a string, return as is
-                    .
-                end
-            )
-        ' "$file" > "${TARGET_LANGUAGE}/${file##*/}"
+        # Create new translated file starting with original
+        translated_file="${TARGET_LANGUAGE}/${file##*/}"
+        cp "$file" "$translated_file"
 
-        # Set the new translation file to read-only
-        chmod 444 "${TARGET_LANGUAGE}/${file##*/}"
-        
+        # Replace each string in the JSON with its translation
+        counter=0
+        while IFS= read -r path; do
+            translation=$(echo "$translations" | sed -n "$((counter + 1))p")
+            if [ -n "$translation" ]; then
+                # Convert path string back to jq path array notation
+                jq_path=$(echo "$path" | awk -F'/' '{printf "["; for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i==NF?"":",")};printf "]"}')
+                # Update the value at the path
+                jq --arg translation "$translation" "setpath($jq_path; \$translation)" "$translated_file" > "${translated_file}.tmp" && mv "${translated_file}.tmp" "$translated_file"
+            fi
+            ((counter++))
+        done <<< "$paths"
+
         echo "Translated to $TARGET_LANGUAGE"
     done
 done
