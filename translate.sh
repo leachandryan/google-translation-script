@@ -30,6 +30,17 @@ export $(grep -v '^#' .env | xargs)
 echo "Google Project ID: $GOOGLE_PROJECT_ID"
 echo "Source Language: $SOURCE_LANGUAGE"
 
+# Create source language directory and copy original files
+mkdir -p "${SOURCE_LANGUAGE}"
+chmod 755 "${SOURCE_LANGUAGE}"
+for file in $json_files; do
+    # Only copy if it's in the root directory
+    if [ "$(dirname "$file")" = "." ]; then
+        cp "$file" "${SOURCE_LANGUAGE}/"
+        echo "Copied original file to ${SOURCE_LANGUAGE}/$(basename "$file")"
+    fi
+done
+
 # Split target languages into an array
 IFS=',' read -ra LANGUAGES_ARRAY <<< "$TARGET_LANGUAGES"
 
