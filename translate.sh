@@ -76,11 +76,32 @@ for file in $recent_files; do
             continue
         fi
 
-        # Extract translated texts
-        TRANSLATED_TEXTS=$(echo "$RESPONSE" | jq -c '.data.translations[].translatedText')
+       # Extract translated texts as an array of strings
+        TRANSLATED_TEXTS=$(echo "$RESPONSE" | jq -c '[.data.translations[].translatedText]')
 
-        # Create a new JSON file with translations
-        echo "$TRANSLATED_TEXTS" | jq -c '.' > "${file%.json}_${TARGET_LANGUAGE}_translations.json"
+        # Create language-specific directory if it doesn't exist
+        mkdir -p "${TARGET_LANGUAGE}"
+
+        # Set directory permissions to allow reading and executing, but prevent non-privileged deletion
+        chmod 755 "${TARGET_LANGUAGE}"
+
+        # Use jq to merge original JSON with translations
+        jq -c --argjson translations "$TRANSLATED_TEXTS" '
+            # Recursively walk through the JSON
+            walk(
+                # If it is a string, try to replace with translation
+                if type == "string" then 
+                    # Find the matching translation (assumes order preservation)
+                    $translations[index(. | tostring)]
+                else 
+                    # If not a string, return as is
+                    .
+                end
+            )
+        ' "$file" > "${TARGET_LANGUAGE}/${file##*/}"
+
+        # Set the new translation file to read-only
+        chmod 444 "${TARGET_LANGUAGE}/${file##*/}"
         
         echo "Translated to $TARGET_LANGUAGE"
     done

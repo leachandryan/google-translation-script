@@ -2,3 +2,4 @@ GOOGLE_PROJECT_ID=your-google-cloud-project-id
 GOOGLE_API_KEY=your-google-cloud-api-key
 SOURCE_LANGUAGE=en  # Source language code (e.g., 'en' for English)
 TARGET_LANGUAGES=es,fr,de  # List of target languages separated by commas
+#"en" "es" "de" "fr" "pt" "ru" "ja" "ko" "it" "nl" "zh-CN" "zh-TW" "pl" "tr" "ar"
