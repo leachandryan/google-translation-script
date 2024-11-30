@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Tracker file path
+# Tracker file to keep track of last script run time
 TRACKER_FILE="translation-tracker"
 
 # Get last script run time
@@ -10,27 +10,27 @@ else
     last_run=$(cat "$TRACKER_FILE")
 fi
 
-# Identify recent JSON files
+# Find JSON files in the current directory
 json_files=$(find . -maxdepth 1 -type f -name "*.json")
 recent_files=""
 
+# Get current timestamp
 current_time=$(date +%s)
 
-# Check if the .env file exists
+# Check if .env file exists
 if [ ! -f .env ]; then
     echo "Error: .env file not found."
     exit 1
 fi
 
-# Export the variables from the .env file
+# Load environment variables from .env file
 export $(grep -v '^#' .env | xargs)
 
-# Access individual variables
+# Print out configuration (be cautious with API keys)
 echo "Google Project ID: $GOOGLE_PROJECT_ID"
-echo "Google API Key: $GOOGLE_API_KEY"
 echo "Source Language: $SOURCE_LANGUAGE"
 
-# Split TARGET_LANGUAGES into an array
+# Split target languages into an array
 IFS=',' read -ra LANGUAGES_ARRAY <<< "$TARGET_LANGUAGES"
 
 # Filter files changed since last run
@@ -43,56 +43,47 @@ done
 
 # Process recent files
 for file in $recent_files; do
-    # Extract every string value from JSON file as a JSON array
+    # Extract string values from JSON file
     values=$(jq -c '[.. | select(type == "string")]' "$file")
-    
-    # Print file and its values
+
     echo "File: $file"
     echo "Values to translate: $values"
     echo "---"
 
-    # Prepare API request with entire array
-    API_KEY="$GOOGLE_API_KEY"
-    SOURCE_LANGUAGE="$SOURCE_LANGUAGE"
-    TARGET_LANGUAGE="fr" # Adjust if needed
+    # Translate for each target language
+    for TARGET_LANGUAGE in "${LANGUAGES_ARRAY[@]}"; do
+        # Make API request
+        RESPONSE=$(curl -s -X POST "https://translation.googleapis.com/language/translate/v2?key=${GOOGLE_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"q\": $values,
+                \"source\": \"$SOURCE_LANGUAGE\",
+                \"target\": \"$TARGET_LANGUAGE\",
+                \"format\": \"text\"
+            }")
 
-    # Construct the API URL
-    # Note: Google Translate API supports multiple queries in a single request
-    URL="https://translation.googleapis.com/language/translate/v2?key=${API_KEY}"
+        # Validate response
+        if ! echo "$RESPONSE" | jq . >/dev/null 2>&1; then
+            echo "Error: Invalid response from API for $TARGET_LANGUAGE"
+            echo "Response: $RESPONSE"
+            continue
+        fi
 
-    # Make the API request with the array of strings
-    RESPONSE=$(curl -s -X POST "$URL" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"q\": $values,
-            \"source\": \"$SOURCE_LANGUAGE\",
-            \"target\": \"$TARGET_LANGUAGE\",
-            \"format\": \"text\"
-        }")
+        # Check for API errors
+        error=$(echo "$RESPONSE" | jq -r '.error.message // empty')
+        if [ -n "$error" ]; then
+            echo "Translation API Error for $TARGET_LANGUAGE: $error"
+            continue
+        fi
 
-    # Check if the response is valid JSON
-    if ! echo "$RESPONSE" | jq . >/dev/null 2>&1; then
-        echo "Error: Invalid response from API. Please check your request."
-        echo "Response: $RESPONSE"
-        continue
-    fi
+        # Extract translated texts
+        TRANSLATED_TEXTS=$(echo "$RESPONSE" | jq -c '.data.translations[].translatedText')
 
-    # Check for API errors
-    error=$(echo "$RESPONSE" | jq -r '.error.message // empty')
-    if [ -n "$error" ]; then
-        echo "Translation API Error: $error"
-        continue
-    fi
-
-    # Extract the translated texts from the JSON response
-    TRANSLATED_TEXTS=$(echo "$RESPONSE" | jq -c '.data.translations[].translatedText')
-
-    # Print the translated texts
-    echo "Translated texts:"
-    echo "$TRANSLATED_TEXTS"
-
-    # Optional: Create a new JSON file with translations
-    echo "$TRANSLATED_TEXTS" | jq -c '.' > "${file%.json}_translations.json"
+        # Create a new JSON file with translations
+        echo "$TRANSLATED_TEXTS" | jq -c '.' > "${file%.json}_${TARGET_LANGUAGE}_translations.json"
+        
+        echo "Translated to $TARGET_LANGUAGE"
+    done
 done
 
 # Update tracker file with current time
